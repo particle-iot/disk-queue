@@ -35,8 +35,8 @@ public:
     DiskQueue(size_t capacity, size_t diskLimit)
     : _offset(0),
       _fdWrite(-1),
-      _fdRead(-1),
       _feWrite(nullptr),
+      _fdRead(-1),
       _feRead(nullptr),
       _capacity(capacity),
       _diskLimit(diskLimit),
@@ -74,19 +74,19 @@ public:
     int stop();
 
     /**
-     * @brief Take item from read queue if available.
+     * @brief Remove front item from read queue if available.
      */
-    void pop_front();
+    void pop_front(); //TODO: should this method signature be similar to peek_front ?
 
     /**
      * @brief Inspect item from read queue if available.
      *
-     * @param[out]     data     Where to store the data
-     * @param[out]     size     [in] maximum size available for copying, [out] size written
+     * @param[out]     data     Buffer to copy the data into
+     * @param[in,out]  size     [in] maximum buffer size available for copying data into, [out] size written
      * @return true Item has been taken and is in output object
      * @return false No item is available
      */
-    bool front(void* data, size_t& size);
+    bool peek_front(uint8_t* data, size_t& size);
 
     /**
      * @brief Push item to write queue if space available
@@ -97,7 +97,7 @@ public:
      * @return false Item has not been pushed
      */
 
-    bool push_back(const void* data, size_t size);
+    bool push_back(const uint8_t* data, size_t size);
 
     /**
      * @brief Get list of file numbers that represent disk queue data filenames.

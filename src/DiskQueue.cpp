@@ -99,7 +99,7 @@ void DiskQueue::pop_front() {
     lseek(_fdRead, item.length, SEEK_CUR);
 }
 
-bool DiskQueue::front(void* data, size_t& size) {
+bool DiskQueue::peek_front(uint8_t* data, size_t& size) {
     CHECK_TRUE(_running, false);
 
     const std::lock_guard<RecursiveMutex> lock(_lock);
@@ -179,7 +179,7 @@ int DiskQueue::getNextWriteFile() {
 }
 
 int DiskQueue::getNextReadFile() {
-    int ret = SYSTEM_ERROR_NONE;
+    int ret = SYSTEM_ERROR_FILE; //TODO this method currently always fails because _fdRead is always unset
 
     // Close anything that may be open
     closeFile(_fdRead);
@@ -243,7 +243,7 @@ void DiskQueue::closeFile(int& fd) {
     }
 }
 
-bool DiskQueue::push_back(const void* data, size_t size) {
+bool DiskQueue::push_back(const uint8_t* data, size_t size) {
     CHECK_TRUE(_running, false);
 
     const std::lock_guard<RecursiveMutex> lock(_lock);

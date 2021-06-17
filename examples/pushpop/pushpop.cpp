@@ -55,7 +55,7 @@ void loop() {
   if (push_count > 3) {
     max_data_buf[0] = 0;
     size_t read_size = 0;
-    if (!gq.front(max_data_buf, read_size)) {
+    if (!gq.peek_front(max_data_buf, read_size)) {
       Log.warn("front failed (%u)", read_size);
     }
     else {
