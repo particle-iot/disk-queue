@@ -15,6 +15,8 @@
  */
 
 #include "DiskQueue.h"
+#include <fcntl.h>
+#include <dirent.h>
 
 // TODO
 // * Implement disk quota
@@ -47,7 +49,7 @@ int DiskQueue::start(const char* path) {
         _running = true;
 
         return SYSTEM_ERROR_NONE;
-    } while (false);
+    } while (false); //TODO is start() meant be run inside a thread?
 
     // Cleanup if errors
     cleanup();
@@ -122,6 +124,7 @@ bool DiskQueue::front(void* data, size_t& size) {
     if (item.flags & ItemFlagActive) {
     }
 
+    // TODO this overflows data if item.length > size input
     rret = read(_fdRead, data, item.length);
     // Check for end of file
     if (rret < (int)item.length) {
@@ -159,6 +162,7 @@ int DiskQueue::getNextWriteFile() {
     }
 
     _fdWrite = open(filename.c_str(), O_CREAT | O_RDWR | O_APPEND, 0664);
+
     // TODO: Check _fdWrite
     if (_fdWrite < 0) {
         return -1; // TODO: choose another

@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <iostream> // TODO delete me
 #include "Particle.h"
 
 /**
@@ -59,7 +58,7 @@ public:
      * created.  The path is checked to exist and created if nonexistant.  This will not create
      * intermediate directories above the path if nested.
      *
-     * @param[in]   path            Full path for
+     * @param[in]   path            Full directory path for storing the queue on the file system, eg `/usr/my_queue`
      * @retval SYSTEM_ERROR_NONE
      * @retval SYSTEM_ERROR_NO_MEMORY
      * @retval SYSTEM_ERROR_FILE
@@ -82,8 +81,8 @@ public:
     /**
      * @brief Inspect item from read queue if available.
      *
-     * @param[out]  object          Item reference to output
-     * @param[in]   delay           Time in milliseconds to wait for item.  0 will return immediately.
+     * @param[out]     data     Where to store the data
+     * @param[out]     size     [in] maximum size available for copying, [out] size written
      * @return true Item has been taken and is in output object
      * @return false No item is available
      */
@@ -92,8 +91,8 @@ public:
     /**
      * @brief Push item to write queue if space available
      *
-     * @param[in]   object          Item reference to enqueue
-     * @param[in]   delay           Time in milliseconds to wait for item.  0 will return immediately.
+     * @param[in]      data     Where to copy data from
+     * @param[in]      size     size of the input data
      * @return true Item has been pushed
      * @return false Item has not been pushed
      */
@@ -139,7 +138,7 @@ private:
     };
 
     /**
-     * @brief Detect of path exists.
+     * @brief Detect if path exists.
      *
      * @param[in]   path            Full path of file or directory
      * @return true File or directory exists
