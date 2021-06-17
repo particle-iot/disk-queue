@@ -97,7 +97,7 @@ int main() {
     size_t s = 0;
     bool peekret;
     do {
-        peekret = theQueue.front(buf, s);
+        peekret = theQueue.peek_front(buf, s);
         if (peekret) theQueue.pop_front();
         printf("Peeked: %d/%lu: %s\n", (int)peekret, s, buf);
         memset(buf, 0, sizeof(buf));
