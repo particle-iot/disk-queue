@@ -89,6 +89,13 @@ public:
     bool peek_front(uint8_t* data, size_t& size);
 
     /**
+     * @brief Get size of data from read queue if available.
+     *
+     * @return Size of data if available; otherwise, zero if empty
+     */
+    size_t peek_front_size();
+
+    /**
      * @brief Push item to write queue if space available
      *
      * @param[in]      data     Where to copy data from

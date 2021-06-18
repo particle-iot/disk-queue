@@ -99,6 +99,37 @@ void DiskQueue::pop_front() {
     lseek(_fdRead, item.length, SEEK_CUR);
 }
 
+size_t DiskQueue::peek_front_size() {
+    CHECK_TRUE(_running, 0);
+
+    const std::lock_guard<RecursiveMutex> lock(_lock);
+    if (-1 == _fdRead) {
+        return 0;
+    }
+    volatile auto offset = lseek(_fdRead, 0, SEEK_CUR);  // TODO: remove me
+    QueueItemHeader item = {};
+    auto rret = read(_fdRead, &item, sizeof(item));
+    // Check for end of file
+    if (rret < (int)sizeof(item)) {
+        closeFile(_fdRead);  // TODO do this somewhere else
+        return 0;
+    }
+
+    // Check for correct magic
+    if (QueueItemMagic != item.magic) {
+        closeFile(_fdRead);  // TODO do this somewhere else
+        return 0;
+    }
+    // Check for active entry
+    if (item.flags & ItemFlagActive) {
+    }
+
+    // Rewind to header
+    lseek(_fdRead, -(sizeof(item)), SEEK_CUR);
+
+    return (size_t)item.length;
+}
+
 bool DiskQueue::peek_front(uint8_t* data, size_t& size) {
     CHECK_TRUE(_running, false);
 
@@ -184,53 +215,55 @@ int DiskQueue::getNextReadFile() {
     // Close anything that may be open
     closeFile(_fdRead);
 
-//    do {
-//        // Figure out which file is the first one to start reading from.  It is normally the first numerical filename.
-//        unsigned long fileN = _fileList.first()->n;
-//        String filename = _path + String(fileN);
-//
-//        _fdRead = open(filename.c_str(), O_RDWR, 0664);
-//        if (_fdRead < 0) {
-//            if (_feWrite != _feRead) {
-//                unlink(filename.c_str());
-//                _fileList.takeFirst();
-//            }
-//            continue;
-//        }
-//
-//        // Get the file header
-//        QueueFileHeader fHeader = {};
-//        auto rret = read(_fdRead, &fHeader, sizeof(fHeader));
-//        if (rret < (int)sizeof(fHeader)) {
-//            ret = SYSTEM_ERROR_IO;
-//            break;
-//        }
-//
-//        while (true) {
-//            volatile auto offset = lseek(_fdRead, 0, SEEK_CUR);  // TODO: remove me
-//    //            if (offset <= st.st_size) {
-//    //                break;
-//    //            }
-//            QueueItemHeader itemHeader = {};
-//            rret = read(_fdRead, &itemHeader, sizeof(itemHeader));
-//            // Check for end of file
-//            if (rret < (int)sizeof(itemHeader)) {
-//                break;
-//            }
-//            // Check for correct magic
-//            if (QueueItemMagic != itemHeader.magic) {
-//                break;
-//            }
-//            // Check for active entry
-//            if (itemHeader.flags & ItemFlagActive) {
-//                // Rewind to header
-//                lseek(_fdRead, -sizeof(itemHeader), SEEK_CUR);
-//                break;
-//            }
-//            // Advance to next entry
-//            lseek(_fdRead, itemHeader.length, SEEK_CUR);
-//        }
-//    } while (true);
+    auto found = false;
+    do {
+        // Figure out which file is the first one to start reading from.  It is normally the first numerical filename.
+        unsigned long fileN = _fileList.first()->n;
+        String filename = _path + String(fileN);
+
+        _fdRead = open(filename.c_str(), O_RDWR, 0664);
+        if (_fdRead < 0) {
+            if (_feWrite != _feRead) {
+                unlink(filename.c_str());
+                _fileList.takeFirst();
+            }
+            continue;
+        }
+
+        // Get the file header
+        QueueFileHeader fHeader = {};
+        auto rret = read(_fdRead, &fHeader, sizeof(fHeader));
+        if (rret < (int)sizeof(fHeader)) {
+            ret = SYSTEM_ERROR_IO;
+            break;
+        }
+
+        while (true) {
+            volatile auto offset = lseek(_fdRead, 0, SEEK_CUR);  // TODO: remove me
+    //            if (offset <= st.st_size) {
+    //                break;
+    //            }
+            QueueItemHeader itemHeader = {};
+            rret = read(_fdRead, &itemHeader, sizeof(itemHeader));
+            // Check for end of file
+            if (rret < (int)sizeof(itemHeader)) {
+                break;
+            }
+            // Check for correct magic
+            if (QueueItemMagic != itemHeader.magic) {
+                break;
+            }
+            // Check for active entry
+            if (itemHeader.flags & ItemFlagActive) {
+                // Rewind to header
+                lseek(_fdRead, -sizeof(itemHeader), SEEK_CUR);
+                found = true;
+                break;
+            }
+            // Advance to next entry
+            lseek(_fdRead, itemHeader.length, SEEK_CUR);
+        }
+    } while (!found);
 
     return ret;
 }
