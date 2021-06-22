@@ -19,6 +19,19 @@
 #include "Particle.h"
 
 /**
+ * @brief Structure for holding status and diagnostics information
+ */
+struct DiskQueueStats {
+    size_t filesTotal;
+
+};
+
+enum class DiskQueuePolicy {
+    FifoDeleteOld,
+    FifoDeleteNew,
+};
+
+/**
  * @brief The <code>DiskQueue</code> class represents a disk-based queue that
  *
  */
@@ -29,17 +42,12 @@ public:
     /**
      * @brief Construct a new DiskQueue object with the given file capacity and disk limit
      *
-     * @param[in]   capacity        Size of read and write cache queues
-     * @param[in]   diskLimit       Count of elements in cache queue before writing to disk
+     * @param[in]   diskLimit       Total disk space reserved for queue
      */
-    DiskQueue(size_t capacity, size_t diskLimit)
-    : _offset(0),
-      _fdWrite(-1),
-      _feWrite(nullptr),
-      _fdRead(-1),
-      _feRead(nullptr),
-      _capacity(capacity),
-      _diskLimit(diskLimit),
+    DiskQueue(size_t diskLimit)
+    : _diskLimit(diskLimit),
+      _diskCurrent(0),
+      _policy(DiskQueuePolicy::FifoDeleteOld),
       _running(false) {
 
     }
@@ -63,7 +71,7 @@ public:
      * @retval SYSTEM_ERROR_NO_MEMORY
      * @retval SYSTEM_ERROR_FILE
      */
-    int start(const char* path);
+    int start(const char* path, DiskQueuePolicy policy = DiskQueuePolicy::FifoDeleteOld);
 
     /**
      * @brief Stop the disk queue.  Flush both read and write queues to disk in anticipation
@@ -74,9 +82,18 @@ public:
     int stop();
 
     /**
+     * @brief Get the current disk usage in bytes.
+     *
+     * @return size_t Size in bytes.
+     */
+    size_t getCurrentDiskUsage() const {
+        return _diskCurrent;
+    }
+
+    /**
      * @brief Remove front item from read queue if available.
      */
-    void pop_front(); //TODO: should this method signature be similar to peek_front ?
+    void popFront(); //TODO: should this method signature be similar to peek_front ?
 
     /**
      * @brief Inspect item from read queue if available.
@@ -86,14 +103,14 @@ public:
      * @return true Item has been taken and is in output object
      * @return false No item is available
      */
-    bool peek_front(uint8_t* data, size_t& size);
+    bool peekFront(uint8_t* data, size_t& size);
 
     /**
      * @brief Get size of data from read queue if available.
      *
      * @return Size of data if available; otherwise, zero if empty
      */
-    size_t peek_front_size();
+    size_t peekFrontSize();
 
     /**
      * @brief Push item to write queue if space available
@@ -104,7 +121,8 @@ public:
      * @return false Item has not been pushed
      */
 
-    bool push_back(const uint8_t* data, size_t size);
+    bool pushBack(const uint8_t* data, size_t size);
+
 
     /**
      * @brief Get list of file numbers that represent disk queue data filenames.
@@ -115,6 +133,7 @@ public:
 
 private:
     static constexpr uint8_t QueueFileMagic = 'P';          //< Magic number that must be present at the beginning of each queue file
+    static constexpr uint8_t QueueFileVersion1 = 0x01;      //< Current version of the file
     static constexpr uint8_t FileFlagReverse = (1 << 0);    //< Flag to indicate that the queue is to be popped in reverse order
 
     static constexpr uint8_t QueueItemMagic = 0xf0;         //< Magic number that must be present at the beginning of each queue item
@@ -141,7 +160,6 @@ private:
         unsigned long n;
         int fd;
         size_t size;
-        String entry;
     };
 
     /**
@@ -188,12 +206,12 @@ private:
      * @brief Create (allocate) FileEntry object and initialize it with given
      * file number and file name.  Optionally append it to file list.
      *
-     * @param[in]   n               File number.
-     * @param[in]   name            File name associated with file number.
-     * @param[in]   append          Append to end of file list.  True to append.  False to no append.
+     * @param[in]   n               File number, also filename
+     * @param[in]   size            File size.
+     * @param[in]   append          Append to end of file list.  True to append.  False to not append.
      * @return FileEntry* Allocated FileEntry object pointer.  nullptr if unsuccessful.
      */
-    FileEntry* addFileNode(unsigned long n, size_t size, const char* name, bool append = true);
+    FileEntry* addFileNode(unsigned long n, size_t size, bool append = true);
 
     /**
      * @brief Destroy FileEntry object.
@@ -209,20 +227,11 @@ private:
      */
     void removeFileNode(int index);
 
-    /**
-     * @brief Get the next write file for the queue
-     */
-    int getNextWriteFile();
-
-    /**
-     * @brief Get the next read file for the queue
-     */
-    int getNextReadFile();
-
-    /**
-     * @brief Close the given file and mark as closed
-     */
-    void closeFile(int& fd);
+    enum class ItemState {
+        InvalidMagic,
+        Active,
+        NotActive,
+    };
 
     /**
      * @brief Get the file numbers associated under the given path.
@@ -234,19 +243,27 @@ private:
      */
     int getFilenames(const char* path);
 
+    /**
+     * @brief Get read index
+     *
+     * @param[in]   policy          Policy to apply for read file deletion
+     * @return int Index for read deletion
+     */
+    int getReadPolicyIndex(DiskQueuePolicy policy);
+
+    /**
+     * @brief Get the index to delete
+     *
+     * @param[in]   policy          Policy to apply for write overflow file deletion
+     * @return int Index for read deletion
+     */
+    int getWriteOverflowPolicyIndex(DiskQueuePolicy policy);
+
     RecursiveMutex _lock;
-    off_t _offset;
-    int _fdWrite;
-    QueueFileHeader _writeHeader;
-    FileEntry* _feWrite;
-
-    int _fdRead;
-    QueueFileHeader _readHeader;
-    FileEntry* _feRead;
-
     Vector<FileEntry*> _fileList;
-    size_t _capacity;
     size_t _diskLimit;
+    size_t _diskCurrent;
     String _path;
+    DiskQueuePolicy _policy;
     bool _running;
 };

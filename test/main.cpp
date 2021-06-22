@@ -1,6 +1,6 @@
 //============================================================================
 // Name        : diskqueue.cpp
-// Author      : 
+// Author      :
 // Version     :
 // Copyright   : Your copyright notice
 // Description : Hello World in C++, Ansi-style
@@ -13,7 +13,8 @@
 #include <chrono>
 #include <ctime>
 #include <atomic>
-#include <pthread.h>
+#include <thread>
+#include <signal.h>
 
 // Need these
 #include <cstdlib>
@@ -25,6 +26,7 @@
 #include <vector>
 
 #include "DiskQueue.h"
+#include "readerwriterqueue.h"
 
 using namespace std;
 
@@ -56,52 +58,137 @@ void listdir() {
     closedir(dir);
 }
 
-struct LogData {
-    uint8_t flags;
-    uint8_t data[];
+constexpr size_t MaxTestElements = 10000;
+
+enum ProducerCommands {
+    ProducerStart,
+    ProducerNone,
+    ProducerPause,
+    ProducerKill,
 };
 
-DiskQueue theQueue(500, 200);
+atomic<ProducerCommands> producerCommand(ProducerNone);
+size_t producerCount = 0;
+
+enum ConsumerCommands {
+    ConsumerStart,
+    ConsumerNone,
+    ConsumerPause,
+    ConsumerKill,
+};
+
+atomic<ConsumerCommands> consumerCommand(ConsumerNone);
+size_t consumerCount = 0;
+
+DiskQueue theQueue(500);
+moodycamel::ReaderWriterQueue<unsigned int> q(MaxTestElements);
+
+void producerThread() {
+    bool run = false;
+
+    while (true) {
+        auto c = producerCommand.exchange(ProducerNone, memory_order_relaxed);
+        switch (c) {
+            case ProducerNone:
+                break;
+            case ProducerStart:
+                run = true;
+                break;
+            case ProducerPause:
+                run = false;
+                break;
+            case ProducerKill:
+                return;
+        }
+
+        if (run) {
+            producerCount++;
+        }
+    }
+}
+
+void consumerThread() {
+    bool run = false;
+
+    while (true) {
+        auto c = consumerCommand.exchange(ConsumerNone, memory_order_relaxed);
+        switch (c) {
+            case ConsumerNone:
+                break;
+            case ConsumerStart:
+                run = true;
+                break;
+            case ConsumerPause:
+                run = false;
+                break;
+            case ConsumerKill:
+                return;
+        }
+
+        if (run) {
+            consumerCount++;
+        }
+    }
+}
+
+void sigintHandler(int number) {
+    producerCommand.store(ProducerKill, memory_order_relaxed);
+    consumerCommand.store(ConsumerKill, memory_order_relaxed);
+    theQueue.stop();
+}
 
 int main() {
-    cout << "Size of struct " << sizeof(LogData) << endl;
-    listdir();
+    signal(SIGINT, sigintHandler);
 
-    auto ret = theQueue.start(chroniclePath);
+    //listdir();
+
+    auto ret = theQueue.start(chroniclePath, DiskQueuePolicy::FifoDeleteOld);
     if (ret) {
         cerr << "Can't start DiskQueue" << endl;
         exit(-1);
     }
+
+    thread producer(producerThread);
+    thread consumer(consumerThread);
+
 #if 1
-    theQueue.push_back((uint8_t*)"Hello there 1", 0);
-    theQueue.push_back((uint8_t*)"Hello here 2", 12);
-    theQueue.push_back((uint8_t*)"Hello where 3", 13);
-    theQueue.push_back((uint8_t*)"Hello where 4", 13);
-    theQueue.push_back((uint8_t*)"Hello where 5", 13);
-    theQueue.push_back((uint8_t*)"Hello where 6", 13);
-    theQueue.push_back((uint8_t*)"Hello where 7", 13);
-    theQueue.push_back((uint8_t*)"Hello where 8", 13);
-    theQueue.push_back((uint8_t*)"Hello where 9", 13);
-    theQueue.push_back((uint8_t*)"Hello where 10", 14);
-    theQueue.push_back((uint8_t*)"Hello where 11", 14);
-    theQueue.push_back((uint8_t*)"Hello where 12", 14);
-    theQueue.push_back((uint8_t*)"Hello where 13", 14);
-    theQueue.push_back((uint8_t*)"Hello where 14", 14);
-    theQueue.push_back((uint8_t*)"Hello where 15", 14);
-    theQueue.push_back((uint8_t*)"Hello where 16", 14);
-    theQueue.push_back((uint8_t*)"Hello where 17", 14);
-    theQueue.push_back((uint8_t*)"Hello where 18", 14);
-    theQueue.push_back((uint8_t*)"Hello where 19", 14);
+//    theQueue.pushBack((uint8_t*)"Hello there 1", 0);
+//    theQueue.pushBack((uint8_t*)"Hello here 2", 12);
+//    theQueue.pushBack((uint8_t*)"Hello where 3", 13);
+//    theQueue.pushBack((uint8_t*)"Hello where 4", 13);
+//    theQueue.pushBack((uint8_t*)"Hello where 5", 13);
+//    theQueue.pushBack((uint8_t*)"Hello where 6", 13);
+//    theQueue.pushBack((uint8_t*)"Hello where 7", 13);
+//    theQueue.pushBack((uint8_t*)"Hello where 8", 13);
+//    theQueue.pushBack((uint8_t*)"Hello where 9", 13);
+//    theQueue.pushBack((uint8_t*)"Hello where 10", 14);
+//    theQueue.pushBack((uint8_t*)"Hello where 11", 14);
+//    theQueue.pushBack((uint8_t*)"Hello where 12", 14);
+//    theQueue.pushBack((uint8_t*)"Hello where 13", 14);
+//    theQueue.pushBack((uint8_t*)"Hello where 14", 14);
+//    theQueue.pushBack((uint8_t*)"Hello where 15", 14);
+//    theQueue.pushBack((uint8_t*)"Hello where 16", 14);
+//    theQueue.pushBack((uint8_t*)"Hello where 17", 14);
+//    theQueue.pushBack((uint8_t*)"Hello where 18", 14);
+//    theQueue.pushBack((uint8_t*)"Hello where 19", 14);
+
+    for (int i = 0;i < 100;i++) {
+        char b[64] = {};
+        auto s = snprintf(b, sizeof(b), "Hello where %d", i);
+        theQueue.pushBack((uint8_t*)b, (size_t)s);
+    }
 #else
     char buf[1024] = {};
-    size_t s = 0;
     bool peekret;
     do {
-        auto size = theQueue.peek_front_size();
-        peekret = theQueue.peek_front((uint8_t*)buf, s);
-        if (peekret) theQueue.pop_front();
+        auto disk1 = theQueue.getCurrentDiskUsage();
+        auto size = theQueue.peekFrontSize();
+        size_t s = sizeof(buf);
+        peekret = theQueue.peekFront((uint8_t*)buf, s);
+        if (peekret) theQueue.popFront();
         else break;
-        printf("Peeked: %d/%lu/%lu: %s\n", (int)peekret, size, s, buf);
+        auto disk2 = theQueue.getCurrentDiskUsage();
+        printf("Peeked: %lu/%lu %d/%lu/%lu: %s\n", disk1, disk2, (int)peekret, size, s, buf);
         memset(buf, 0, sizeof(buf));
     } while (peekret);
 #endif
@@ -110,6 +197,13 @@ int main() {
     for (auto i : l) {
         printf("List file %lu\n", i);
     }
+
+    producerCommand.store(ProducerKill, memory_order_relaxed);
+    consumerCommand.store(ConsumerKill, memory_order_relaxed);
+
+    producer.join();
+    consumer.join();
+    printf("Producer: %lu\nConsumer: %lu\n", producerCount, consumerCount);
 
     theQueue.stop();
 

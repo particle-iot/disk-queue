@@ -19,13 +19,14 @@
 #include <dirent.h>
 
 // TODO
-// * Implement disk quota
-// * Properly unlink file given corrupt items/headers
+// * peekFront() after peekFrontSize() problem
+// * Handle pushBack() policy for DiskQueuePolicy::FifoDeleteNew
 
-int DiskQueue::start(const char* path) {
+int DiskQueue::start(const char* path, DiskQueuePolicy policy) {
     // Check if already running
     CHECK_FALSE(_running, SYSTEM_ERROR_NONE);
 
+    // The lock here is to prevent the reader and writer from running
     const std::lock_guard<RecursiveMutex> lock(_lock);
 
     int ret = SYSTEM_ERROR_NONE;
@@ -40,16 +41,11 @@ int DiskQueue::start(const char* path) {
         // Create a list of all filenames that may contain previously saved data
         getFilenames(path);
 
-        // Point us to the file that will form the front of the queue
-        getNextWriteFile();
-
-        // Point us to the file that will form the back of the queue
-        getNextReadFile();
-
+        _policy = policy;
         _running = true;
 
         return SYSTEM_ERROR_NONE;
-    } while (false); //TODO is start() meant be run inside a thread?
+    } while (false);
 
     // Cleanup if errors
     cleanup();
@@ -57,6 +53,7 @@ int DiskQueue::start(const char* path) {
 }
 
 int DiskQueue::stop() {
+    // The lock here is to prevent the reader and writer from running
     const std::lock_guard<RecursiveMutex> lock(_lock);
 
     _running = false;
@@ -67,243 +64,247 @@ int DiskQueue::stop() {
     return SYSTEM_ERROR_NONE;
 }
 
-
-void DiskQueue::pop_front() {
-    if (!_running) {
-        return;
-    }
-
-    const std::lock_guard<RecursiveMutex> lock(_lock);
-
-    volatile auto offset = lseek(_fdRead, 0, SEEK_CUR);  // TODO: remove me
-    QueueItemHeader item = {};
-    auto rret = read(_fdRead, &item, sizeof(item));
-    // Check for end of file
-    if (rret < (int)sizeof(item)) {
-        closeFile(_fdRead);  // TODO do this somewhere else
-        // TODO goto next file
-        return;
-    }
-    // Check for correct magic
-    if (QueueItemMagic != item.magic) {
-        closeFile(_fdRead);  // TODO do this somewhere else
-        // TODO goto next file
-        return;
-    }
-    // Check for active entry
-    if (item.flags & ItemFlagActive) {
-    }
-
-    // TODO check if seek will go past end of file
-    // Advance to next entry
-    lseek(_fdRead, item.length, SEEK_CUR);
+int DiskQueue::getReadPolicyIndex(DiskQueuePolicy policy) {
+    return 0; // Will always be the first for now
 }
 
-size_t DiskQueue::peek_front_size() {
-    CHECK_TRUE(_running, 0);
+int DiskQueue::getWriteOverflowPolicyIndex(DiskQueuePolicy policy) {
+    int ret = 0;
 
-    const std::lock_guard<RecursiveMutex> lock(_lock);
-    if (-1 == _fdRead) {
-        return 0;
+    switch (policy) {
+    case DiskQueuePolicy::FifoDeleteOld:
+        ret = 0;
+        break;
+
+    case DiskQueuePolicy::FifoDeleteNew:
+        ret = _fileList.size() - 1;  // Will not be < zero
+        break;
     }
-    volatile auto offset = lseek(_fdRead, 0, SEEK_CUR);  // TODO: remove me
-    QueueItemHeader item = {};
-    auto rret = read(_fdRead, &item, sizeof(item));
-    // Check for end of file
-    if (rret < (int)sizeof(item)) {
-        closeFile(_fdRead);  // TODO do this somewhere else
-        return 0;
-    }
-
-    // Check for correct magic
-    if (QueueItemMagic != item.magic) {
-        closeFile(_fdRead);  // TODO do this somewhere else
-        return 0;
-    }
-    // Check for active entry
-    if (item.flags & ItemFlagActive) {
-    }
-
-    // Rewind to header
-    lseek(_fdRead, -(sizeof(item)), SEEK_CUR);
-
-    return (size_t)item.length;
-}
-
-bool DiskQueue::peek_front(uint8_t* data, size_t& size) {
-    CHECK_TRUE(_running, false);
-
-    const std::lock_guard<RecursiveMutex> lock(_lock);
-    if (-1 == _fdRead) {
-        return false;
-    }
-    volatile auto offset = lseek(_fdRead, 0, SEEK_CUR);  // TODO: remove me
-    QueueItemHeader item = {};
-    auto rret = read(_fdRead, &item, sizeof(item));
-    // Check for end of file
-    if (rret < (int)sizeof(item)) {
-        closeFile(_fdRead);  // TODO do this somewhere else
-        return false;
-    }
-
-    // Check for correct magic
-    if (QueueItemMagic != item.magic) {
-        closeFile(_fdRead);  // TODO do this somewhere else
-        return false;
-    }
-    // Check for active entry
-    if (item.flags & ItemFlagActive) {
-    }
-
-    // TODO this overflows data if item.length > size input
-    rret = read(_fdRead, data, item.length);
-    // Check for end of file
-    if (rret < (int)item.length) {
-        closeFile(_fdRead);  // TODO do this somewhere else
-        return false;
-    }
-
-    // Rewind to header
-    lseek(_fdRead, -(sizeof(item) + item.length), SEEK_CUR);
-    size = (size_t)item.length;
-
-    return true;
-}
-
-int DiskQueue::getNextWriteFile() {
-    // Close the current file if open
-    closeFile(_fdWrite);
-
-    unsigned long fileN = 0;
-    bool newWriteFile = false;
-
-    if (_fileList.isEmpty()) {
-        newWriteFile = true;
-    } else {
-        fileN = _fileList.last()->n;
-    }
-
-    String filename = _path + String(fileN);
-    struct stat st = {};
-    if (!stat(filename, &st)) {
-        if ((size_t)st.st_size >= _capacity) {
-            filename = _path + String(++fileN);
-            newWriteFile = true;
-        }
-    }
-
-    _fdWrite = open(filename.c_str(), O_CREAT | O_RDWR | O_APPEND, 0664);
-
-    // TODO: Check _fdWrite
-    if (_fdWrite < 0) {
-        return -1; // TODO: choose another
-    }
-    if (newWriteFile) {
-        _feWrite = addFileNode(fileN, 0, String(fileN));
-        QueueFileHeader fHeader = {QueueFileMagic, 0x01, 0x00};
-        write(_fdWrite, &fHeader, sizeof(fHeader));
-    } else {
-        _feWrite = _fileList.last();
-    }
-
-    return SYSTEM_ERROR_NONE;
-}
-
-int DiskQueue::getNextReadFile() {
-    int ret = SYSTEM_ERROR_FILE; //TODO this method currently always fails because _fdRead is always unset
-
-    // Close anything that may be open
-    closeFile(_fdRead);
-
-    auto found = false;
-    do {
-        // Figure out which file is the first one to start reading from.  It is normally the first numerical filename.
-        unsigned long fileN = _fileList.first()->n;
-        String filename = _path + String(fileN);
-
-        _fdRead = open(filename.c_str(), O_RDWR, 0664);
-        if (_fdRead < 0) {
-            if (_feWrite != _feRead) {
-                unlink(filename.c_str());
-                _fileList.takeFirst();
-            }
-            continue;
-        }
-
-        // Get the file header
-        QueueFileHeader fHeader = {};
-        auto rret = read(_fdRead, &fHeader, sizeof(fHeader));
-        if (rret < (int)sizeof(fHeader)) {
-            ret = SYSTEM_ERROR_IO;
-            break;
-        }
-
-        while (true) {
-            volatile auto offset = lseek(_fdRead, 0, SEEK_CUR);  // TODO: remove me
-    //            if (offset <= st.st_size) {
-    //                break;
-    //            }
-            QueueItemHeader itemHeader = {};
-            rret = read(_fdRead, &itemHeader, sizeof(itemHeader));
-            // Check for end of file
-            if (rret < (int)sizeof(itemHeader)) {
-                break;
-            }
-            // Check for correct magic
-            if (QueueItemMagic != itemHeader.magic) {
-                break;
-            }
-            // Check for active entry
-            if (itemHeader.flags & ItemFlagActive) {
-                // Rewind to header
-                lseek(_fdRead, -sizeof(itemHeader), SEEK_CUR);
-                found = true;
-                break;
-            }
-            // Advance to next entry
-            lseek(_fdRead, itemHeader.length, SEEK_CUR);
-        }
-    } while (!found);
 
     return ret;
 }
 
-void DiskQueue::closeFile(int& fd) {
-    // Simply close the file.  Sync the file at the caller and not here.
-    if (-1 != fd) {
-        close(fd);
-        fd = -1;
-    }
-}
+size_t DiskQueue::peekFrontSize() {
+    CHECK_TRUE(_running, 0);
 
-bool DiskQueue::push_back(const uint8_t* data, size_t size) {
-    CHECK_TRUE(_running, false);
-
+    // The lock here is to prevent the writer from catching up with the reader
     const std::lock_guard<RecursiveMutex> lock(_lock);
 
-    if ((_fdWrite <= 0) || !_feWrite) {
-        return false;
-    }
+    size_t size = 0;
 
-    auto fileSize = lseek(_fdWrite, 0, SEEK_CUR);
-
-    if ((size_t)fileSize >= _capacity) {
-        if (getNextWriteFile()) {
-            return false; // TODO: choose another
+    while (true) {
+        if (_fileList.isEmpty()) {
+            break; // Nothing available
         }
+
+        auto entry = _fileList.first(); // TODO: Apply policy
+        unsigned long fileN = entry->n;
+        String filename = _path + String(fileN);
+
+        auto fd = open(filename.c_str(), O_RDWR, 0664);
+        if (0 > fd) {
+            // File open is unsuccessful so remove file and continue
+            unlink(filename.c_str());
+            removeFileNode(getReadPolicyIndex(_policy));
+            continue;
+        }
+
+        // Get the file header
+        QueueFileHeader fileHeader = {};
+        auto ret = read(fd, &fileHeader, sizeof(fileHeader));
+        if ((ret < (int)sizeof(fileHeader)) ||
+            (QueueFileMagic != fileHeader.magic) ||
+            (QueueFileVersion1 != fileHeader.version)) {
+
+            close(fd);
+            unlink(filename.c_str());
+            removeFileNode(getReadPolicyIndex(_policy));
+            continue;
+        }
+
+        // Get the item header
+        QueueItemHeader itemHeader = {};
+        ret = read(fd, &itemHeader, sizeof(itemHeader));
+        if ((ret < (int)sizeof(itemHeader)) ||
+            (QueueItemMagic != itemHeader.magic) ||
+            (0 == (ItemFlagActive & itemHeader.flags))) {
+
+            close(fd);
+            unlink(filename.c_str());
+            removeFileNode(getReadPolicyIndex(_policy));
+            continue;
+        }
+
+        // Everything was successful
+        close(fd);
+        size = (size_t)itemHeader.length;
+        break;
     }
 
+    return size;
+}
+
+// TODO: given size may be derived from peekFrontSize but this function may advance forward to another
+//       entry until successful
+bool DiskQueue::peekFront(uint8_t* data, size_t& size) {
+    CHECK_TRUE(_running, false);
+
+    // The lock here is to prevent the writer from catching up with the reader
+    const std::lock_guard<RecursiveMutex> lock(_lock);
+
+    auto success = false;
+
+    while (true) {
+        if (_fileList.isEmpty()) {
+            size = 0;
+            break; // Nothing available
+        }
+
+        auto entry = _fileList.first(); // TODO: Apply policy
+        unsigned long fileN = entry->n;
+        String filename = _path + String(fileN);
+
+        auto fd = open(filename.c_str(), O_RDWR, 0664);
+        if (0 > fd) {
+            // File open is unsuccessful so remove file and continue
+            unlink(filename.c_str());
+            removeFileNode(getReadPolicyIndex(_policy));
+            continue;
+        }
+
+        // Get the file header
+        QueueFileHeader fileHeader = {};
+        auto ret = read(fd, &fileHeader, sizeof(fileHeader));
+        if ((ret < (int)sizeof(fileHeader)) ||
+            (QueueFileMagic != fileHeader.magic) ||
+            (QueueFileVersion1 != fileHeader.version)) {
+
+            close(fd);
+            unlink(filename.c_str());
+            removeFileNode(getReadPolicyIndex(_policy));
+            continue;
+        }
+
+        // Get the item header
+        QueueItemHeader itemHeader = {};
+        ret = read(fd, &itemHeader, sizeof(itemHeader));
+        if ((ret < (int)sizeof(itemHeader)) ||
+            (QueueItemMagic != itemHeader.magic) ||
+            (0 == (ItemFlagActive & itemHeader.flags))) {
+
+            close(fd);
+            unlink(filename.c_str());
+            removeFileNode(getReadPolicyIndex(_policy));
+            continue;
+        }
+
+        // Get the data
+        auto toRead = std::min<size_t>(size, (size_t)itemHeader.length);
+        ret = read(fd, data, toRead);
+        if (ret < (int)toRead) {
+            close(fd);
+            unlink(filename.c_str());
+            removeFileNode(getReadPolicyIndex(_policy));
+            continue;
+        }
+
+        // Everything was successful
+        close(fd);
+        success = true;
+        size = (size_t)toRead;
+        break;
+    }
+
+    return success;
+}
+
+void DiskQueue::popFront() {
+    if (!_running) {
+        return;
+    }
+
+    // The lock here is to prevent the writer from catching up with the reader
+    const std::lock_guard<RecursiveMutex> lock(_lock);
+
+    if (_fileList.isEmpty()) {
+        return; // Nothing available
+    }
+
+    auto entry = _fileList.first(); // TODO: Apply policy
+    unsigned long fileN = entry->n;
+    String filename = _path + String(fileN);
+
+    unlink(filename.c_str());
+    removeFileNode(getReadPolicyIndex(_policy));
+}
+
+bool DiskQueue::pushBack(const uint8_t* data, size_t size) {
+    CHECK_TRUE(_running, false);
+
+    // The lock here is to prevent the reader from catching up with the writer
+    const std::lock_guard<RecursiveMutex> lock(_lock);
+
+    // If the size given is zero then assume this the data a null terminated string
     if (size == 0) {
         size = strlen((char*)data);
     }
-    QueueItemHeader itemHeader = { QueueItemMagic, ItemFlagActive, (uint16_t)size }; // TODO: fix length
-    auto written = write(_fdWrite, &itemHeader, sizeof(itemHeader));
-    written += write(_fdWrite, data, size);
-    (void)written;
 
-    fsync(_fdWrite);
+    unsigned long fileN = 0;
+    if (!_fileList.isEmpty()) {
+        fileN = _fileList.last()->n + 1;
+    }
 
-    return true;
+    String filename = _path + String(fileN);
+
+    auto fd = open(filename.c_str(), O_CREAT | O_RDWR | O_APPEND, 0664);
+    if (0 > fd) {
+        return false;
+    }
+
+    do {
+        QueueFileHeader fileHeader = { QueueFileMagic, QueueFileVersion1, 0x00 /* no flags */ };
+        size_t written = 0;
+        auto ret = write(fd, &fileHeader, sizeof(fileHeader));
+        if (0 >= ret) {
+            break;
+        }
+        written += (size_t)ret;
+
+        QueueItemHeader itemHeader = { QueueItemMagic, ItemFlagActive, (uint16_t)size };
+        ret = write(fd, &itemHeader, sizeof(itemHeader));
+        if (0 >= ret) {
+            break;
+        }
+        written += (size_t)ret;
+
+        ret = write(fd, data, size);
+        if (0 >= ret) {
+            break;
+        }
+        written += (size_t)ret;
+
+        size_t fileSize = sizeof(fileHeader) + sizeof(itemHeader) + size;
+        if ((size_t)written != fileSize) {
+            break;
+        }
+
+        fsync(fd);
+        close(fd);
+        addFileNode(fileN, fileSize);
+
+        while (_diskCurrent > _diskLimit) {
+            auto index = getWriteOverflowPolicyIndex(_policy);
+            auto entry = _fileList.at(index);
+            String toDelete = _path + String(entry->n);
+            removeFileNode(index);
+            unlink(toDelete.c_str());
+        }
+        return true;
+    } while (false);
+
+    close(fd);
+    unlink(filename.c_str());
+    return false;
 }
 
 /**
@@ -386,25 +387,22 @@ void DiskQueue::cleanupFiles() {
     }
 
     _fileList.clear();
-
-    closeFile(_fdWrite);
-    closeFile(_fdRead);
 }
 
 void DiskQueue::cleanup() {
 }
 
-DiskQueue::FileEntry* DiskQueue::addFileNode(unsigned long n, size_t size, const char* name, bool append) {
+DiskQueue::FileEntry* DiskQueue::addFileNode(unsigned long n, size_t size, bool append) {
     FileEntry* entry = new FileEntry;
     if (!entry) {
         return nullptr;
     }
     entry->n = n;
     entry->size = size;
-    entry->entry = String(name);
 
     if (append) {
         _fileList.append(entry);
+        _diskCurrent += size;
     }
 
     return entry;
@@ -417,6 +415,12 @@ void DiskQueue::removeFileNode(FileEntry* entry) {
 void DiskQueue::removeFileNode(int index) {
     if ((index >= 0) && (index < _fileList.size())) {
         auto entry = _fileList.at(index);
+        if (_diskCurrent >= entry->size) {
+            _diskCurrent -= entry->size;
+        } else {
+            // TODO: illegal, assert here?
+            _diskCurrent = 0;
+        }
         removeFileNode(entry);
         _fileList.removeAt(index);
     }
@@ -434,12 +438,13 @@ int DiskQueue::getFilenames(const char* path) {
             continue;
         }
 
+        String filename = String(path) + "/" + String(ent->d_name);
         struct stat st = {};
-        stat(ent->d_name, &st);
+        stat(filename.c_str(), &st);
         char* stop = nullptr;
         unsigned long n = strtoul(ent->d_name, &stop, 10);
         if (strlen(ent->d_name) == (size_t)(stop - ent->d_name)) {
-            FileEntry* entry = addFileNode(n, st.st_size, ent->d_name);
+            FileEntry* entry = addFileNode(n, st.st_size);
             CHECK_TRUE(entry, SYSTEM_ERROR_NO_MEMORY);
         }
     }
