@@ -172,10 +172,20 @@ int main() {
 //    theQueue.pushBack((uint8_t*)"Hello where 18", 14);
 //    theQueue.pushBack((uint8_t*)"Hello where 19", 14);
 
+    int method = 0;
     for (int i = 0;i < 100;i++) {
         char b[64] = {};
         auto s = snprintf(b, sizeof(b), "Hello where %d", i);
-        theQueue.pushBack((uint8_t*)b, (size_t)s);
+        switch (method) {
+        case 0: theQueue.pushBack((uint8_t*)b, (size_t)s); method++; break;
+
+        case 1: theQueue.pushBack(b); method++; break;
+
+        case 2: theQueue.pushBack(String(b));
+        // Fall through
+        default:
+            method = 0;
+        }
     }
 #else
     char buf[1024] = {};

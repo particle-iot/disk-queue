@@ -120,8 +120,25 @@ public:
      * @return true Item has been pushed
      * @return false Item has not been pushed
      */
-
     bool pushBack(const uint8_t* data, size_t size);
+
+    /**
+     * @brief Push null terminated character string item to write queue if space available
+     *
+     * @param[in]      data     Where to copy string data from
+     * @return true Item has been pushed
+     * @return false Item has not been pushed
+     */
+    bool pushBack(const char* data);
+
+    /**
+     * @brief Push String item to write queue if space available
+     *
+     * @param[in]      data     Where to copy data from
+     * @return true Item has been pushed
+     * @return false Item has not been pushed
+     */
+    bool pushBack(const String& data);
 
 
     /**

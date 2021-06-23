@@ -24,12 +24,12 @@
 
 int DiskQueue::start(const char* path, DiskQueuePolicy policy) {
     // Check if already running
-    CHECK_FALSE(_running, SYSTEM_ERROR_NONE);
+    CHECK_FALSE(_running, SYSTEM_ERROR_INVALID_STATE);
 
     // The lock here is to prevent the reader and writer from running
     const std::lock_guard<RecursiveMutex> lock(_lock);
 
-    int ret = SYSTEM_ERROR_NONE;
+    int ret = SYSTEM_ERROR_UNKNOWN;
     do {
         if (!dirExists(path) && mkdir(path, 0775)) {
             ret = SYSTEM_ERROR_FILE;
@@ -112,7 +112,7 @@ size_t DiskQueue::peekFrontSize() {
         // Get the file header
         QueueFileHeader fileHeader = {};
         auto ret = read(fd, &fileHeader, sizeof(fileHeader));
-        if ((ret < (int)sizeof(fileHeader)) ||
+        if (((int)sizeof(fileHeader) > ret) ||
             (QueueFileMagic != fileHeader.magic) ||
             (QueueFileVersion1 != fileHeader.version)) {
 
@@ -125,7 +125,7 @@ size_t DiskQueue::peekFrontSize() {
         // Get the item header
         QueueItemHeader itemHeader = {};
         ret = read(fd, &itemHeader, sizeof(itemHeader));
-        if ((ret < (int)sizeof(itemHeader)) ||
+        if (((int)sizeof(itemHeader) > ret) ||
             (QueueItemMagic != itemHeader.magic) ||
             (0 == (ItemFlagActive & itemHeader.flags))) {
 
@@ -175,7 +175,7 @@ bool DiskQueue::peekFront(uint8_t* data, size_t& size) {
         // Get the file header
         QueueFileHeader fileHeader = {};
         auto ret = read(fd, &fileHeader, sizeof(fileHeader));
-        if ((ret < (int)sizeof(fileHeader)) ||
+        if (((int)sizeof(fileHeader) > ret) ||
             (QueueFileMagic != fileHeader.magic) ||
             (QueueFileVersion1 != fileHeader.version)) {
 
@@ -188,7 +188,7 @@ bool DiskQueue::peekFront(uint8_t* data, size_t& size) {
         // Get the item header
         QueueItemHeader itemHeader = {};
         ret = read(fd, &itemHeader, sizeof(itemHeader));
-        if ((ret < (int)sizeof(itemHeader)) ||
+        if (((int)sizeof(itemHeader) > ret) ||
             (QueueItemMagic != itemHeader.magic) ||
             (0 == (ItemFlagActive & itemHeader.flags))) {
 
@@ -201,7 +201,7 @@ bool DiskQueue::peekFront(uint8_t* data, size_t& size) {
         // Get the data
         auto toRead = std::min<size_t>(size, (size_t)itemHeader.length);
         ret = read(fd, data, toRead);
-        if (ret < (int)toRead) {
+        if ((int)toRead > ret) {
             close(fd);
             unlink(filename.c_str());
             removeFileNode(getReadPolicyIndex(_policy));
@@ -240,14 +240,10 @@ void DiskQueue::popFront() {
 
 bool DiskQueue::pushBack(const uint8_t* data, size_t size) {
     CHECK_TRUE(_running, false);
+    CHECK_TRUE((0 != size), false);
 
     // The lock here is to prevent the reader from catching up with the writer
     const std::lock_guard<RecursiveMutex> lock(_lock);
-
-    // If the size given is zero then assume this the data a null terminated string
-    if (size == 0) {
-        size = strlen((char*)data);
-    }
 
     unsigned long fileN = 0;
     if (!_fileList.isEmpty()) {
@@ -307,6 +303,15 @@ bool DiskQueue::pushBack(const uint8_t* data, size_t size) {
     return false;
 }
 
+bool DiskQueue::pushBack(const char* data) {
+    auto size = strlen(data);
+    return pushBack((uint8_t*)data, size);
+}
+
+bool DiskQueue::pushBack(const String& data) {
+    return pushBack((uint8_t*)data.c_str(), (size_t)data.length());
+}
+
 /**
  * @brief Get list of file numbers that represent disk queue data filenames.
  *
@@ -337,7 +342,7 @@ int DiskQueue::sortPartition(Vector<FileEntry*>& array, int begin, int end) {
     FileEntry* last = array[end];
     int pivot = (begin - 1);
 
-    for (int i = begin; i <= end - 1; ++i) {
+    for (int i = begin; i <= (end - 1); ++i) {
         if (array[i]->n <= last->n) {
             std::swap<FileEntry*>(array[++pivot], array[i]);
         }
@@ -361,18 +366,18 @@ void DiskQueue::quickSortFiles(Vector<FileEntry*>& array, int begin, int end)
     stack[++top] = begin;
     stack[++top] = end;
 
-    while (top >= 0) {
+    while (0 <= top) {
         end = stack[top--];
         begin = stack[top--];
 
         int pivot = sortPartition(array, begin, end);
 
-        if (pivot - 1 > begin) {
+        if ((pivot - 1) > begin) {
             stack[++top] = begin;
             stack[++top] = pivot - 1;
         }
 
-        if (pivot + 1 < end) {
+        if ((pivot + 1) < end) {
             stack[++top] = pivot + 1;
             stack[++top] = end;
         }
@@ -381,7 +386,7 @@ void DiskQueue::quickSortFiles(Vector<FileEntry*>& array, int begin, int end)
 
 void DiskQueue::cleanupFiles() {
     if (!_fileList.isEmpty()) {
-        for (auto item = _fileList.begin();item != _fileList.end();++item) {
+        for (auto item = _fileList.begin(); _fileList.end() != item; ++item) {
             removeFileNode(*item);
         }
     }
@@ -413,7 +418,7 @@ void DiskQueue::removeFileNode(FileEntry* entry) {
 }
 
 void DiskQueue::removeFileNode(int index) {
-    if ((index >= 0) && (index < _fileList.size())) {
+    if ((0 <= index) && (_fileList.size() > index)) {
         auto entry = _fileList.at(index);
         if (_diskCurrent >= entry->size) {
             _diskCurrent -= entry->size;
@@ -433,8 +438,8 @@ int DiskQueue::getFilenames(const char* path) {
     }
 
     struct dirent* ent = nullptr;
-    while ((ent = readdir(dir)) != nullptr) {
-        if (ent->d_type != DT_REG) {
+    while (nullptr != (ent = readdir(dir))) {
+        if (DT_REG != ent->d_type) {
             continue;
         }
 
