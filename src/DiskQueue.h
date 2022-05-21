@@ -194,6 +194,18 @@ public:
     }
 
     /**
+     * @brief Destroy file number array.
+     *
+     */
+    void cleanupFiles();
+
+    /**
+     * @brief Destroy read and write cache queues.
+     *
+     */
+    void cleanup();
+
+    /**
      * @brief Get list of file numbers that represent disk queue data filenames.
      *
      * @return Vector<unsigned long> An array of the file numbers.
@@ -258,18 +270,6 @@ private:
      * @param[in]       end         Last index to consider (inclusive)
      */
     void quickSortFiles(Vector<FileEntry*>& array, int begin, int end);
-
-    /**
-     * @brief Destroy file number array.
-     *
-     */
-    void cleanupFiles();
-
-    /**
-     * @brief Destroy read and write cache queues.
-     *
-     */
-    void cleanup();
 
     /**
      * @brief Create (allocate) FileEntry object and initialize it with given
