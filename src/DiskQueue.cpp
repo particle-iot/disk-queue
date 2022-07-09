@@ -403,6 +403,26 @@ void DiskQueue::cleanupFiles() {
     _fileList.clear();
 }
 
+void DiskQueue::unlinkFiles() {
+    // The lock here is to prevent the reader and writer from running
+    const std::lock_guard<RecursiveMutex> lock(_lock);
+
+    if (!_fileList.isEmpty()) {
+        for (auto item = _fileList.begin(); _fileList.end() != item; ++item) {
+
+            unsigned long fileN = (*item)->n;
+            String filename = _path + String(fileN);
+
+            auto fd = open(filename.c_str(), O_RDWR, 0664);
+            if(0 <= fd) {
+                // File open is succesfull so remove file and continue
+                unlink(filename.c_str());
+                continue;
+            }
+        }
+    }
+}
+
 void DiskQueue::cleanup() {
 }
 
