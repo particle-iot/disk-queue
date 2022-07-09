@@ -200,6 +200,12 @@ public:
     void cleanupFiles();
 
     /**
+     * @brief Unlink/remove files in number array.
+     *
+     */
+    void unlinkFiles();
+
+    /**
      * @brief Destroy read and write cache queues.
      *
      */
